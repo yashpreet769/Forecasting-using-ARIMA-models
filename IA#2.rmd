@@ -1,0 +1,229 @@
+---
+title : "Yashpreet Kaur (yk8742)" 
+output: html_notebook
+---
+***
+<center>
+## Individual Assignment #2: ARIMA Lab.
+#### Due: Nov. 23 before class time
+#### (40 points)
+</center>
+***
+
+The file titled **US Electricity.csv** includes a time series index compiled by the US Federal Reserve representing total fossil-fuel US electricity generation by all utilities from January 1939 through October 2021.
+
+In the following code box we read the CSV file and set up the data as a *tsibble* and then we plot it and subset it to examine it.
+
+```{r,warning=FALSE, message=FALSE}
+library(fpp3)
+
+D <- read.csv("US Electricity.csv") %>% 
+  mutate(DATE = yearmonth(DATE)) %>%
+  as_tsibble(index = DATE)
+  
+D %>% autoplot(ELEC)
+
+DR <- D %>% filter(DATE >= yearmonth("2010 Jan"))
+
+DR %>% autoplot(ELEC)
+```
+
+We are interested in developing a two-year long monthly forecast (24 months) for the national electricity production requirements. 
+
+
+1. Examine the stationarity of the **ELEC** time series in the reduced **DR** data, examine also the corresponding ACF and PACF diagrams and propose three plausible ARIMA models to fit the data.
+
+**We observe from the above trends that data is non-stationary and has seasonality. So, we conduct unitroot_nsdiffs and unitroot_ndiffs tests to find the number of seasonal and normal differences required in order to get stationary trend.**  
+```{r}
+#checking the number of differences using unit root method
+DR %>%
+  features(ELEC, unitroot_nsdiffs)
+
+DR %>%
+  features(ELEC, unitroot_ndiffs)
+```
+**We observe that unitroot_nsdiffs() returns 1 indicating one seasonal difference is required. Similarly, we also apply the unitroot_ndiffs() function to the data which returns 0. These functions suggest we should do a seasonal difference only.**
+
+```{r,warning=FALSE, message=FALSE}
+#one seasonal difference taken as suggested by the unit root method 
+
+DR %>%
+  gg_tsdisplay(difference(ELEC, 12),
+               plot_type='partial', lag=36) +
+  labs(title="Seasonally differenced once", y="")
+
+#additional model involving double seasonal difference
+
+DR %>%
+  gg_tsdisplay(difference(difference(ELEC, 12)),
+               plot_type='partial', lag=36) +
+  labs(title="Seasonally differenced twice", y="")
+```
+**We propose following three models on the basis of PACF and ACF of above models:**
+
+**1. ARIMA (0,0,3)(3,1,0) : From ACF plot of single difference, the peak is observed at lag 3 and hence MA(3) non-seasonal component**
+
+**2. ARIMA (1,0,0)(3,1,0) : From PACF plot of single difference, the peak is observed at lag 1 and hence non seasonal component AR(1) should be added. Additionally, we observe peaks at 12,24 and 36 implying AR(3) model for seasonal component**
+
+**3. ARIMA (0,1,1)(0,1,2) : From ACF plot of double difference, the peak is observed at lag 1 for non-seasonal component and hence MA(1) is chosen for non-seasonal component. Similarly, for seasonal component, we choose MA(2) as there are two peaks at 12 and 24**
+
+
+
+2. Using **fable** fit the following five models to the **DR** data: (i)-(iii) the three models you propose in (1), (iv) the automatically selected model by the ARIMA() functionn, and (v) the automatically selected model by the ETS() function.  Report the name/order of each model and the corresponding AICc and BIC.
+```{r}
+# Fitting the chosen models, auto Arima and ETS models
+
+models <- DR %>%
+  model(
+    m1 = ARIMA(ELEC ~ pdq(0,0,3) + PDQ(3,1,0)),
+    m2 = ARIMA(ELEC ~ pdq(1,0,0) + PDQ(3,1,0)),
+    m3 = ARIMA(ELEC ~ pdq(0,1,1) + PDQ(0,1,2)),
+    ARIMA_auto = ARIMA(ELEC),
+    ETS_auto = ETS(ELEC)
+  )
+
+
+models %>% select(ARIMA_auto) %>% report()
+```
+
+
+```{r}
+models %>% select(ETS_auto) %>% report()
+```
+
+
+```{r}
+glance(models) %>% arrange(AICc) %>% select(.model,AICc,BIC) 
+
+```
+**We observe that all the three proposed models m1, m2 and m3 corresponding to ARIMA (0,0,3) (3,1,0), ARIMA (1,0,0) (3,1,0) and ARIMA(0,1,1) (0,1,2) respectively have better AICc and BIC than the auto ARIMA(1,0,0)(2,1,0) and auto ETS (M,N,A) models.** 
+
+
+3. Examine the residuals of all the models using the Ljung-Box test and the **gg_tsresiduals()** function. Is there a validity problem with any of the models?
+
+```{r}
+#Ljung-Box test 
+models %>% augment() %>%
+  features(.resid, ljung_box, lag = 12) 
+
+#residual spread 
+
+models %>% select(m1) %>% gg_tsresiduals() + labs(title = "ARIMA (0,0,3) (3,1,0)", y="")
+
+models %>% select(m2) %>% gg_tsresiduals() + labs(title = "ARIMA (1,0,0) (3,1,0)", y="")
+
+models %>% select(m3) %>% gg_tsresiduals() + labs(title = "ARIMA (0,1,1) (0,1,2)", y="")
+
+models %>% select(ARIMA_auto) %>% gg_tsresiduals() + labs(title = "ARIMA auto", y="")
+
+models %>% select(ETS_auto) %>% gg_tsresiduals() + labs(title = "ETS auto", y="")
+```
+**ARIMA(0,1,1)(0,1,2) model has small but one significant spike at lag 5 but remaining are consistent with white noise. Moreover, auto ETS models has spikes at lag 1 and 5. Hence, we conducted the Ljung Box test to have more clarity.**
+
+Null hypothesis for Ljung-Box method is that the residuals are uncorrelated and random. Hence, we need to have large p-values so that the null hypothesis can not be rejected. All models except the auto ETS models have high p-values, hence those residuals are consistent with white noise.
+
+**ARIMA(0,1,1)(0,1,2) model has p-value which is relatively lower (~22%) when compared to other ARIMA models but is still large enough for the null hypothesis to not be rejected. Other ARIMA models have fairly large p-values.**
+
+**Auto ETS model has p-value lower than 5%, hence the forecast from this model may not be valid.**
+
+4. For the set of five models selected (automatically and/or manually)  examine the in-sample accuracy metrics.  Based on a holistic analysis of the information criteria select the best two ARIMA models and the ETS model. Report the model name/order and their parameter values.
+```{r}
+# accuracy metrics
+models %>% accuracy()
+```
+**Based on holistic analysis above based on AICc, BIC and MAPE, we observe that the best models are m1 and m2 i.e. ARIMA (0,0,3) (3,1,0) and ARIMA (1,0,0) (3,1,0).**
+```{r}
+# reporting model details and parameters
+
+models %>% select(m1) %>% report()
+
+```
+```{r}
+models %>% select(m2) %>% report()
+
+```
+```{r}
+models %>% select(ARIMA_auto) %>% report()
+```
+```{r}
+models %>% select(ETS_auto) %>% report()
+
+```
+
+For model cross-validation purposes stretch the DR data as follows:
+```{r}
+D.CV <- DR %>%
+  filter(DATE >= yearmonth("2010 Jan")) %>%
+  stretch_tsibble(.init = 36, .step = 1)
+```
+
+5. Fit cross-validation models for each of the time sub-series in the stretched data for each of the four model types selected in (4). In the case(s) where the models were automatically selected, do NOT run the automatic selection under cross validation, instead enter manually the model order/type when you call the ARIMA()/ETS() function. 
+
+```{r,warning=FALSE, message=FALSE}
+# fitting cross-validation models
+
+CV_m <- D.CV %>%
+    model(
+    m1 = ARIMA(ELEC ~ pdq(0,0,3) + PDQ(3,1,0)),
+    m2 = ARIMA(ELEC ~ pdq(1,0,0) + PDQ(3,1,0)),
+    Arima_auto = ARIMA(ELEC ~ pdq(1,0,0)+ PDQ(2,1,0)),
+    ETS_auto = ETS(ELEC ~ error("M") + trend("N") + season("A"))
+    )
+  
+CV_m %>% report()
+```
+
+
+6. Prepare a 24-month ahead forecast foe each of the models fitted in (5) and prepare a plot of MAPE vs months-ahead.  Based on the dynamic behavior of cross-validation MAPE discuss which model(s) should be kept/discarded.
+```{r,warning=FALSE, message=FALSE}
+#24 month forecast 
+CV_m %>% 
+  forecast(h = 24) %>%
+  group_by(.id, .model) %>%
+  mutate(h = row_number()) %>%
+  ungroup() -> CV_f
+
+#MAPE vs months-ahead 
+CV_f %>%
+  accuracy(DR, by = c("h", ".model")) %>%
+  ggplot(aes(x = h, y = MAPE, color = .model)) +
+  geom_line()
+```
+**Since the MAPE value is decreasing for models m1 and m2 i.e. for models ARIMA (0,0,3)(3,1,0) and ARIMA (1,0,0)(3,1,0) over the next 24 forecasted months, we should keep m1 and m2 models. As MAPE values are increasing for auto ARIMA and auto ETS models, those models should be discarded.**
+
+7. Examine the cross-validation residuals of the models you selected in (6), and based on their correlation (model vs. model) discuss if it is advisable to prepare an ensemble forecast averaging the forecasts of two or more models.
+```{r,warning=FALSE, message=FALSE}
+# correlation between models
+
+CV_f %>% filter(.model %in% c('m1','m2')) %>% 
+  accuracy(DR, by = c("h", ".model")) %>%
+  ggplot(aes(x = h, y = MAPE, color = .model)) +
+  geom_line()
+
+```
+**We observe that the MAPE values for the two best models m1= ARIMA (0,0,3)(3,1,0) and m2 = ARIMA (1,0,0)(3,1,0) are closely following each other which implies high correlation with each other. Hence, ensemble forecast averaging might help give a better answer by averaging out errors as both models perform better for different forecast months.**
+
+8. The index is very useful for energy planning purpose as most of the variability and seasonality is produced by combined cycle natural gas plants and single cycle peaker plants that also run on natural gas (i.e., nuclear and coal generation is fixed and relatively constant).  For this purpose it is of interest to know what is the production index level that will not be superated with a probability (service-level) of 95%. For the best model in (6) plot the 24-month ahead forecast and plot the forecast and the corresponding confidence interval to help you address the service level question. Report numerically the month-by-month the index forecasts that meet the desired 95% service level.
+
+```{r}
+#plotting the 24 month forecast for the best model in 6 i.e. m2: ARIMA (1,0,0) (3,1,0)
+models %>%
+  select(m2) %>% 
+  forecast(h = 24) %>%
+  autoplot(level = c(95)) 
+
+#plotting the entire trend along with forecast 
+models %>%
+  select(m2) %>% 
+  forecast(h = 24) %>%
+  autoplot(DR, level = c(95)) 
+
+#reporting the numerical values corresponding to 95% confidence interval 
+models %>%
+  select(m2) %>% 
+  forecast(h = 24) %>%
+  hilo(level = c(90)) %>% 
+  unpack_hilo("90%") %>% 
+  select (DATE, .mean, "90%_lower", "90%_upper")
+```
+
